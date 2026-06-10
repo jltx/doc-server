@@ -52,16 +52,18 @@ highlighting. Self-contained HTML docs keep their own styling.
 
 ## Configuration
 
-Two environment variables, both optional:
+Most people just answer the folder prompt during `./install.sh`. For the port,
+or for scripting the install non-interactively, two environment variables are
+honored:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DOC_SERVER_ROOT` | `~/projects` | Directory the scanner walks. |
+| `DOC_SERVER_ROOT` | `~/projects` | Directory the scanner walks. If set, it overrides the install prompt. |
 | `DOC_SERVER_PORT` | `4848` | Port the localhost server binds to. |
 
-`install.sh` bakes these into the LaunchAgent plist, so a launchd-managed
-instance (which doesn't inherit your shell environment) honors them too. To run
-ad hoc without launchd:
+`install.sh` bakes the chosen values into the LaunchAgent plist, so a
+launchd-managed instance (which doesn't inherit your shell environment) honors
+them too. To run ad hoc without launchd:
 
 ```
 DOC_SERVER_ROOT=~/work DOC_SERVER_PORT=5000 ./.venv/bin/python server.py
@@ -100,18 +102,36 @@ and symlink escapes), and the target must be a member of the live scan
 allow-set. A request for a non-doc such as `.env` or a secrets file returns
 **403** even with a hand-crafted URL.
 
-## Install (auto-start at login, macOS)
+## Install (macOS)
 
-```
-./install.sh
-```
+1. **Get the code** — download this folder (GitHub → Code → Download ZIP, then
+   unzip) or `git clone` it.
+2. **Check for Python** — in Terminal, run `python3 --version`. If you see
+   "command not found", install Apple's Command Line Tools (which include it):
+   `xcode-select --install`, then continue.
+3. **Run the installer** — in Terminal:
 
-Creates `.venv`, installs `markdown` + `pygments` + `pytest`, writes a
-LaunchAgent at `~/Library/LaunchAgents/local.doc-server.plist`
-(`RunAtLoad` + `KeepAlive`), and bootstraps it into `gui/$UID`. Idempotent —
-re-running boots out the existing agent first and reloads.
+   ```
+   cd doc-server
+   ./install.sh
+   ```
 
-Restart one-liner:
+   It asks **which folder to serve** — press Enter for `~/projects`, or type a
+   path (e.g. `~/Documents/notes`). That's it: the server starts immediately
+   and again every time you log in.
+
+Open **http://localhost:4848**.
+
+To **change the folder later**, just re-run `./install.sh` and answer the
+prompt again.
+
+Under the hood, `install.sh` creates a `.venv`, installs `markdown` +
+`pygments` + `pytest`, writes a LaunchAgent at
+`~/Library/LaunchAgents/local.doc-server.plist` (`RunAtLoad` + `KeepAlive`),
+and bootstraps it into `gui/$UID`. It's idempotent — re-running boots out the
+existing agent first and reloads.
+
+Restart it any time with:
 
 ```
 launchctl kickstart -k gui/$UID/local.doc-server
