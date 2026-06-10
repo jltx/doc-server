@@ -108,3 +108,26 @@ def test_scan_is_cached_until_cleared(tmp_path):
     # Clearing the cache forces a fresh walk that sees both files.
     scanner.clear_cache()
     assert {e.rel_path for e in scan(tmp_path)} == {"docs/a.md", "docs/b.md"}
+
+
+# Directory symlinks are not followed: a cycle would recurse forever, and any
+# target outside the root is rejected by path safety anyway.
+def test_symlinked_directory_is_not_followed(tmp_path):
+    import os
+
+    # A real docs tree the symlink will point at.
+    target = tmp_path / "target_repo" / "docs"
+    target.mkdir(parents=True)
+    _write(target, "guide.md")
+    # A directory symlink placed where the walk would otherwise descend.
+    (tmp_path / "docs").mkdir(exist_ok=True)
+    os.symlink(target, tmp_path / "docs" / "link")
+    _write(tmp_path, "docs/real.md")
+
+    scanner.clear_cache()
+    rels = {e.rel_path for e in scan(tmp_path)}
+
+    # The walk did not descend through the symlink (no "docs/link/..." entries).
+    assert not any(r.startswith("docs/link/") for r in rels)
+    # Real, non-symlinked docs still surface.
+    assert "docs/real.md" in rels

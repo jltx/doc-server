@@ -127,6 +127,11 @@ def _iter_included_files(root: Path):
 
         for child in children:
             if child.is_dir():
+                # Don't follow directory symlinks: a cycle would recurse
+                # forever, and anything they point to outside the root is
+                # rejected by the path-safety check anyway.
+                if child.is_symlink():
+                    continue
                 name = child.name
                 if _is_excluded_dir(name):
                     continue

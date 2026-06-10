@@ -9,3 +9,6 @@ venv/
 
 # Runtime
 server.log
+
+# macOS
+.DS_Store

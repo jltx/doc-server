@@ -106,9 +106,9 @@ allow-set. A request for a non-doc such as `.env` or a secrets file returns
 
 1. **Get the code** — download this folder (GitHub → Code → Download ZIP, then
    unzip) or `git clone` it.
-2. **Check for Python** — in Terminal, run `python3 --version`. If you see
-   "command not found", install Apple's Command Line Tools (which include it):
-   `xcode-select --install`, then continue.
+2. **Check for Python** — in Terminal, run `python3 --version` (need 3.8 or
+   newer). If you see "command not found", install Apple's Command Line Tools
+   (which include it): `xcode-select --install`, then continue.
 3. **Run the installer** — in Terminal:
 
    ```
