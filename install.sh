@@ -88,6 +88,8 @@ cat > "$PLIST" <<PLIST_EOF
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
     <key>StandardOutPath</key>
     <string>${LOG}</string>
     <key>StandardErrorPath</key>

@@ -19,6 +19,7 @@ Exclusions:
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -113,71 +114,105 @@ def title_for(path: Path) -> str:
 def _iter_included_files(root: Path):
     """Yield every file under `root` that passes the inclusion rules.
 
-    Shared by scan() and allowed_paths() so the prune/inclusion logic lives in
-    one place. Yields raw Path objects; callers decide whether to read titles
-    (scan) or just take the resolved path (allowed_paths).
+    `root` must already be resolved: the walk never follows directory symlinks,
+    so every yielded path is a real path without further resolve() calls.
     """
-    # Manual recursive walk so we can prune excluded directories before
-    # descending into them (os.walk-style topdown pruning).
-    def walk(directory: Path):
+    self_dir = str(SELF_DIR)
+
+    # os.scandir reads the file type from the directory entry itself, so the
+    # walk costs one syscall per directory instead of several per entry.
+    def walk(directory: str):
         try:
-            children = sorted(directory.iterdir(), key=lambda p: p.name)
+            with os.scandir(directory) as it:
+                children = sorted(it, key=lambda e: e.name)
         except OSError:
             return
 
         for child in children:
-            if child.is_dir():
-                # Don't follow directory symlinks: a cycle would recurse
-                # forever, and anything they point to outside the root is
-                # rejected by the path-safety check anyway.
-                if child.is_symlink():
+            name = child.name
+            # Don't follow directory symlinks: a cycle would recurse forever,
+            # and anything they point to outside the root is rejected by the
+            # path-safety check anyway.
+            if child.is_dir(follow_symlinks=False):
+                if _is_excluded_dir(name) or child.path == self_dir:
                     continue
-                name = child.name
-                if _is_excluded_dir(name):
-                    continue
-                # Never descend into the doc-server's own directory, wherever
-                # it sits under root, so the server doesn't serve its own source.
-                if child.resolve() == SELF_DIR:
-                    continue
-                yield from walk(child)
-            elif child.is_file():
-                name = child.name
-                # Dotfiles are excluded.
-                if name.startswith("."):
-                    continue
-                if child.suffix.lower() not in ELIGIBLE_EXTENSIONS:
-                    continue
-                if _should_include(child.relative_to(root).parts):
-                    yield child
+                yield from walk(child.path)
+            elif (
+                not name.startswith(".")
+                and os.path.splitext(name)[1].lower() in ELIGIBLE_EXTENSIONS
+                and child.is_file()
+            ):
+                path = Path(child.path)
+                if _should_include(path.relative_to(root).parts):
+                    yield path
 
     if root.is_dir():
-        yield from walk(root)
+        yield from walk(str(root))
+
+
+def is_servable(target: Path, root: Path) -> bool:
+    """Whether the walk under `root` would yield `target`, without walking.
+
+    Both paths must be resolved. Path safety calls this once per request, so a
+    doc open costs a few stats instead of a full tree walk.
+    """
+    try:
+        parts = target.relative_to(root).parts
+    except ValueError:
+        return False
+    if not parts or not target.is_file():
+        return False
+    name = parts[-1]
+    if name.startswith(".") or target.suffix.lower() not in ELIGIBLE_EXTENSIONS:
+        return False
+    if any(_is_excluded_dir(d) for d in parts[:-1]):
+        return False
+    if SELF_DIR == target or SELF_DIR in target.parents:
+        return False
+    return _should_include(parts)
 
 
 def _build_scan(root: Path) -> list[DocEntry]:
     """Uncached: walk `root` and build a DocEntry (with title) per included doc."""
     entries: list[DocEntry] = []
+    titles: dict[Path, tuple[float, str]] = {}
     for file in _iter_included_files(root):
         rel_parts = file.relative_to(root).parts
         repo = TOP_LEVEL_LABEL if len(rel_parts) == 1 else rel_parts[0]
         kind = "md" if file.suffix.lower() == ".md" else "html"
+        mtime = file.stat().st_mtime
+        titles[file] = (mtime, _cached_title(file, mtime))
         entries.append(
             DocEntry(
-                abs_path=file.resolve(),
+                abs_path=file,
                 rel_path=file.relative_to(root).as_posix(),
                 repo=repo,
                 kind=kind,
-                title=title_for(file),
-                mtime=file.stat().st_mtime,
+                title=titles[file][1],
+                mtime=mtime,
             )
         )
+    # Swap in only this scan's files so titles of deleted docs don't accumulate.
+    global _titles
+    _titles = titles
     return entries
 
 
+# Titles from the previous scan, keyed by path and checked against mtime, so a
+# rescan reads only the docs that changed instead of opening every doc again.
+_titles: dict[Path, tuple[float, str]] = {}
+
+
+def _cached_title(file: Path, mtime: float) -> str:
+    hit = _titles.get(file)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    return title_for(file)
+
+
 # ---- TTL cache ------------------------------------------------------------
-# The walk stats every file under ROOT and is the dominant per-request cost, and
-# a single doc open fires two path-safety walks (/view then the /content
-# iframe). We cache per (kind, resolved root) for SCAN_CACHE_TTL seconds. The
+# The walk visits every directory under ROOT and is the dominant cost of an index
+# load. We cache per (kind, resolved root) for SCAN_CACHE_TTL seconds. The
 # lock guards only the dict; the walk runs outside it, so a burst of concurrent
 # misses may walk more than once (harmless) rather than serialize behind a lock.
 _cache_lock = threading.Lock()
@@ -210,22 +245,8 @@ def _cached(kind: str, root: Path, build):
 def scan(root: Path) -> list[DocEntry]:
     """Return the docs worth serving under `root`, as DocEntry objects.
 
-    Reads a title per doc, so this is the index's view of the tree. Cached for
-    SCAN_CACHE_TTL seconds. Path-safety validation should use allowed_paths
-    instead, which skips the title reads.
+    Reads a title per changed doc, so this is the index's view of the tree.
+    Cached for SCAN_CACHE_TTL seconds. Path-safety validation uses is_servable
+    instead, which checks one path without a walk.
     """
     return _cached("scan", root, _build_scan)
-
-
-def allowed_paths(root: Path) -> set[Path]:
-    """Resolved absolute paths of every doc the scanner would serve.
-
-    This is all path-safety validation needs. Unlike scan() it reads no file
-    contents — just the directory walk — so a cold doc open isn't taxed with
-    title extraction it never uses.
-    """
-    return _cached(
-        "paths",
-        root,
-        lambda r: {file.resolve() for file in _iter_included_files(r)},
-    )

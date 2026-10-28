@@ -11,8 +11,8 @@ Routes:
 Path safety (for /view, /content, /raw):
   1. path param required.
   2. target = (ROOT / path).resolve() must be within ROOT.resolve().
-  3. target must be a member of the current scan(ROOT) allow-set
-     (compared by resolved abs path); otherwise 403.
+  3. target must be a doc the scan(ROOT) walk would yield
+     (scanner.is_servable on the resolved path); otherwise 403.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 
 from config import PORT, ROOT
 from renderer import render_markdown
-from scanner import allowed_paths, scan
+from scanner import is_servable, scan
 import templates
 
 # Content types for raw byte serving by extension.
@@ -54,7 +54,7 @@ def resolve_safe(path_param: str | None, root: Path) -> Path:
         raise SafetyError("outside root")
 
     # Must be a doc the scanner would actually serve.
-    if target not in allowed_paths(root):
+    if not is_servable(target, root_resolved):
         raise SafetyError("not an allowed doc")
 
     return target

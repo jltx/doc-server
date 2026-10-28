@@ -5,7 +5,7 @@ AC8 (title extraction). Each test builds its own temp tree.
 from pathlib import Path
 
 import scanner
-from scanner import allowed_paths, scan
+from scanner import scan
 
 
 def _write(root: Path, rel: str, content: str = "x") -> None:
@@ -74,22 +74,22 @@ def test_titles_are_extracted_correctly(tmp_path):
     assert titles["docs/page.html"] == "Page X"  # <title> contents
 
 
-# allowed_paths (the path-safety validation set) covers exactly the same docs
-# as scan(), but as resolved absolute paths and without reading file contents.
-def test_allowed_paths_matches_scan_inclusion(tmp_path):
-    _write(tmp_path, "docs/a.md")
-    _write(tmp_path, "repoX/README.md")
-    _write(tmp_path, "repoX/src/internal.md")  # buried source -> excluded
-    _write(tmp_path, "secret.txt")  # wrong extension -> excluded
+# is_servable (the path-safety check) accepts exactly the docs scan() yields.
+def test_is_servable_matches_scan_inclusion(tmp_path):
+    root = tmp_path.resolve()
+    _write(root, "docs/a.md")
+    _write(root, "repoX/README.md")
+    _write(root, "repoX/docs/deep/guide.md")
+    _write(root, "repoX/src/internal.md")  # buried source -> excluded
+    _write(root, "repoX/node_modules/pkg/docs/x.md")  # excluded dir
+    _write(root, "repoX/.claude/docs/y.md")  # dot dir
+    _write(root, "secret.txt")  # wrong extension -> excluded
 
     scanner.clear_cache()
-    paths = allowed_paths(tmp_path)
+    scanned = {e.abs_path for e in scan(root)}
+    candidates = {p.resolve() for p in root.rglob("*") if p.is_file()}
 
-    # Exactly the resolved abs paths of the included docs — nothing buried/wrong.
-    assert paths == {
-        (tmp_path / "docs/a.md").resolve(),
-        (tmp_path / "repoX/README.md").resolve(),
-    }
+    assert {p for p in candidates if scanner.is_servable(p, root)} == scanned
 
 
 # The scan is cached: a file added within the TTL window stays hidden until the
@@ -131,3 +131,18 @@ def test_symlinked_directory_is_not_followed(tmp_path):
     assert not any(r.startswith("docs/link/") for r in rels)
     # Real, non-symlinked docs still surface.
     assert "docs/real.md" in rels
+
+
+# A rescan re-reads the title of a doc whose mtime changed.
+def test_rescan_picks_up_changed_title(tmp_path):
+    import os
+
+    _write(tmp_path, "docs/a.md", "# Old\n")
+    scanner.clear_cache()
+    assert [e.title for e in scan(tmp_path)] == ["Old"]
+
+    _write(tmp_path, "docs/a.md", "# New\n")
+    st = (tmp_path / "docs/a.md").stat()
+    os.utime(tmp_path / "docs/a.md", (st.st_atime, st.st_mtime + 1))
+    scanner.clear_cache()
+    assert [e.title for e in scan(tmp_path)] == ["New"]

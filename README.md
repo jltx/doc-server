@@ -98,8 +98,7 @@ doc-server/
 
 `/view`, `/content`, and `/raw` enforce three checks: the `path` param must be
 present, the resolved target must stay within the root (defeats `../` traversal
-and symlink escapes), and the target must be a member of the live scan
-allow-set. A request for a non-doc such as `.env` or a secrets file returns
+and symlink escapes), and the target must be a file the scan would include. A request for a non-doc such as `.env` or a secrets file returns
 **403** even with a hand-crafted URL.
 
 ## Install (macOS)
@@ -127,7 +126,8 @@ prompt again.
 
 Under the hood, `install.sh` creates a `.venv`, installs `markdown` +
 `pygments` + `pytest`, writes a LaunchAgent at
-`~/Library/LaunchAgents/local.doc-server.plist` (`RunAtLoad` + `KeepAlive`),
+`~/Library/LaunchAgents/local.doc-server.plist` (`RunAtLoad` + `KeepAlive`,
+plus `ProcessType: Interactive` so launchd does not throttle its disk walks),
 and bootstraps it into `gui/$UID`. It's idempotent — re-running boots out the
 existing agent first and reloads.
 
